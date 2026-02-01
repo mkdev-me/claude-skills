@@ -1,8 +1,6 @@
 #!/bin/sh
 ''''exec "`dirname $0`/venv/bin/python3" "$0" "$@" #'''
 import argparse
-import base64
-import io
 import os
 import sys
 from google import genai
@@ -33,7 +31,8 @@ Examples:
     )
     parser.add_argument(
         "--reference",
-        help="Optional reference image path for style/content guidance"
+        action="append",
+        help="Optional reference image path(s) for style/content guidance. Can be specified multiple times."
     )
     parser.add_argument(
         "--size",
@@ -46,8 +45,8 @@ Examples:
     # Get API key from environment
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
-        print("Error: GEMINI_API_KEY environment variable not set.", file=sys.stderr)
-        print("Set it with: export GEMINI_API_KEY='your-api-key'", file=sys.stderr)
+        print("Error: GOOGLE_API_KEY environment variable not set.", file=sys.stderr)
+        print("Set it with: export GOOGLE_API_KEY='your-api-key'", file=sys.stderr)
         sys.exit(1)
 
     client = genai.Client(api_key=api_key)
@@ -55,18 +54,19 @@ Examples:
     # Build content list
     contents = [args.prompt]
 
-    # Add reference image if provided
+    # Add reference images if provided
     if args.reference:
-        try:
-            reference_image = Image.open(args.reference)
-            contents.append(reference_image)
-            print(f"Using reference image: {args.reference}")
-        except FileNotFoundError:
-            print(f"Error: Reference image '{args.reference}' not found.", file=sys.stderr)
-            sys.exit(1)
-        except Exception as e:
-            print(f"Error loading reference image: {e}", file=sys.stderr)
-            sys.exit(1)
+        for ref_path in args.reference:
+            try:
+                reference_image = Image.open(ref_path)
+                contents.append(reference_image)
+                print(f"Using reference image: {ref_path}")
+            except FileNotFoundError:
+                print(f"Error: Reference image '{ref_path}' not found.", file=sys.stderr)
+                sys.exit(1)
+            except Exception as e:
+                print(f"Error loading reference image: {e}", file=sys.stderr)
+                sys.exit(1)
 
     # Create output directory if it doesn't exist
     output_dir = os.path.dirname(args.output)
@@ -78,10 +78,12 @@ Examples:
 
     try:
         response = client.models.generate_content(
-            model="gemini-2.0-flash-preview-image-generation",
+            model="gemini-3-pro-image-preview",
             contents=contents,
             config=types.GenerateContentConfig(
-                response_modalities=["Text", "Image"],
+                image_config=types.ImageConfig(
+                    image_size=args.size,
+                )
             )
         )
     except Exception as e:
@@ -90,13 +92,11 @@ Examples:
 
     # Process response
     image_saved = False
-    for part in response.candidates[0].content.parts:
+    for part in response.parts:
         if part.text is not None:
             print(f"Model response: {part.text}")
         elif part.inline_data is not None:
-            # Decode image data and save
-            image_data = base64.b64decode(part.inline_data.data)
-            generated_image = Image.open(io.BytesIO(image_data))
+            generated_image = part.as_image()
             generated_image.save(args.output)
             print(f"Image saved to: {args.output}")
             image_saved = True
